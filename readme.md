@@ -1,4 +1,5 @@
 # Space Cadet
+För att få fram controls klicka 'TAB' inne i spelet.
 
 ## Installation
 
@@ -8,3 +9,4 @@
 
    ```bash
    python -m pip install pygame
+
