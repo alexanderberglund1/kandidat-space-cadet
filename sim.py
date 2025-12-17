@@ -17,7 +17,7 @@ def resolve_collisions(bodies):
 
             b = bodies[j]
 
-            # stjärna + stjärna: ignorera (dem ska inte äta varandra)
+            # stjärna + stjärna
             if a.is_star and b.is_star:
                 continue
 
@@ -25,7 +25,7 @@ def resolve_collisions(bodies):
             if dist > a.radius + b.radius:
                 continue
 
-            # stjärna absorberar planet (stjärnan ändras inte)
+            # stjärna absorberar planet
             if a.is_star and not b.is_star:
                 merged.add(j)
                 continue
