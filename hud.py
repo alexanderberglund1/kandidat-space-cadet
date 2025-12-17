@@ -37,16 +37,16 @@ class HUD:
 
         return lines
 
-    def draw(self, screen, title, status_lines, controls_line=None, right_margin=0):
+    def draw(self, screen, title, status_lines, controls_line=None, right_margin=0, avoid_rect=None):
         if not self.enabled:
             return
 
         screen_w = screen.get_width()
+        screen_h = screen.get_height()
 
-        # left area available (avoid inspector area)
+        
         available_w = max(220, screen_w - right_margin - 20)
 
-        # build logical lines
         base_text = [str(title)] + [str(s) for s in (status_lines or [])]
 
         ctrl_text_lines = []
@@ -54,9 +54,10 @@ class HUD:
             wrap_w = max(180, available_w - self.pad * 2)
             ctrl_text_lines = self._wrap_text(str(controls_line), wrap_w)
 
-        # render surfaces and measure widths
-        base_surfs = [self.font.render(t, True, (240, 240, 240)) if i == 0 else self.font.render(t, True, (210, 210, 210))
-                      for i, t in enumerate(base_text)]
+        base_surfs = []
+        for i, t in enumerate(base_text):
+            col = (240, 240, 240) if i == 0 else (210, 210, 210)
+            base_surfs.append(self.font.render(t, True, col))
 
         ctrl_surfs = [self.font.render(t, True, (170, 170, 170)) for t in ctrl_text_lines]
 
@@ -67,17 +68,14 @@ class HUD:
         max_line_w = max(s.get_width() for s in all_surfs)
         box_w = min(available_w, max_line_w + self.pad * 2)
 
-        # height
-        line_h = self.font.get_height()
+        
         h = self.pad * 2
 
-        # base lines
         for i, s in enumerate(base_surfs):
             h += s.get_height()
             if i != len(base_surfs) - 1:
                 h += self.gap
 
-        # controls block
         if ctrl_surfs:
             h += self.gap
             for i, s in enumerate(ctrl_surfs):
@@ -85,7 +83,18 @@ class HUD:
                 if i != len(ctrl_surfs) - 1:
                     h += 4
 
-        # draw box
+        
+        x0, y0 = 10, 10
+        hud_rect = pygame.Rect(x0, y0, box_w, h)
+
+        
+        if avoid_rect is not None and hud_rect.colliderect(avoid_rect):
+            hud_rect.y = avoid_rect.bottom + 10
+
+        
+        if hud_rect.bottom > screen_h - 10:
+            hud_rect.y = max(10, screen_h - 10 - hud_rect.height)
+        #d box
         box = pygame.Surface((box_w, h), pygame.SRCALPHA)
         pygame.draw.rect(box, (0, 0, 0, 150), (0, 0, box_w, h), border_radius=12)
         pygame.draw.rect(box, (255, 255, 255, 40), (0, 0, box_w, h), width=1, border_radius=12)
@@ -107,4 +116,4 @@ class HUD:
                 if i != len(ctrl_surfs) - 1:
                     y += 4
 
-        screen.blit(box, (10, 10))
+        screen.blit(box, hud_rect.topleft)
