@@ -10,8 +10,17 @@ from camera import (
 )
 from sim import resolve_collisions, remove_far_bodies
 from orbit_assist import predict_orbit, draw_faded_orbit
+
+try:
+    from orbit_assist import classify_orbit
+except ImportError:
+    def classify_orbit(*args, **kwargs):
+        return "UNKNOWN"
+
 from starfield import Starfield
 from hud import HUD
+from physics import G
+from inspector import InspectorPanel
 
 
 PLANET_PRESETS = {
@@ -23,6 +32,7 @@ PLANET_PRESETS = {
 MIN_DRAG_DISTANCE = 15
 VELOCITY_SCALE = 0.4
 DESPAWN_DISTANCE = 4000
+DOUBLECLICK_MS = 320
 
 
 def create_central_star(w, h):
@@ -63,6 +73,9 @@ class SandboxScene:
         self.starfield = Starfield(self.w, self.h, count=300, seed=1337)
         self.hud = HUD(self.font_ui)
 
+        self.inspector = InspectorPanel(self.font_ui, (self.w, self.h))
+        self.inspector.set_mode("sandbox")
+
         self.time_scale = 1.0
         self.current_preset = 2
 
@@ -83,11 +96,18 @@ class SandboxScene:
         self.predicted_cache = []
         self.last_predict_pos = None
         self.last_predict_vel = None
+        self.last_orbit_kind = "UNKNOWN"
 
         self.show_labels = False
         self.show_trails = True
 
         self.follow_target = None
+        self.hover_target = None
+
+        self.paused = False
+
+        self._last_click_ms = 0
+        self._last_click_body = None
 
     def _follow_candidates(self):
         planets = [b for b in self.bodies if not getattr(b, "is_star", False)]
@@ -105,6 +125,7 @@ class SandboxScene:
 
         i = candidates.index(self.follow_target)
         self.follow_target = candidates[(i + 1) % len(candidates)]
+        self.inspector.set_selected(self.follow_target)
 
     def _center_on_target(self, target):
         if target is None:
@@ -126,7 +147,17 @@ class SandboxScene:
 
         return best
 
+    def _double_clicked(self, body):
+        now = pygame.time.get_ticks()
+        ok = body is not None and self._last_click_body is body and (now - self._last_click_ms) <= DOUBLECLICK_MS
+        self._last_click_ms = now
+        self._last_click_body = body
+        return ok
+
     def handle_event(self, event):
+        if self.inspector.handle_event(event):
+            return None
+
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 return "MENU"
@@ -136,6 +167,9 @@ class SandboxScene:
 
             if event.key == pygame.K_TAB:
                 self.hud.toggle_controls()
+
+            if event.key == pygame.K_SPACE:
+                self.paused = not self.paused
 
             if event.key == pygame.K_l:
                 self.show_labels = not self.show_labels
@@ -158,10 +192,12 @@ class SandboxScene:
                 self.bodies = [create_central_star(self.w, self.h)]
                 self.time_scale = 1.0
                 self.follow_target = None
+                self.inspector.clear()
 
             elif event.key == pygame.K_d:
                 self.bodies = create_sandbox_demo(self.w, self.h)
                 self.follow_target = None
+                self.inspector.clear()
 
             elif event.key == pygame.K_f:
                 self._cycle_follow()
@@ -186,10 +222,26 @@ class SandboxScene:
             after = screen_to_world(mouse_screen, self.camera_offset, self.zoom)
             self.camera_offset += before - after
 
+        if event.type == pygame.MOUSEMOTION:
+            self.hover_target = self._pick_body_at_screen(event.pos) if not self.dragging else None
+
+            if self.dragging:
+                self.drag_current_world = screen_to_world(pygame.Vector2(event.pos), self.camera_offset, self.zoom)
+
+            elif self.panning:
+                delta = pygame.Vector2(event.pos) - self.pan_start_screen
+                self.camera_offset = self.pan_start_offset - delta / self.zoom
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             picked = self._pick_body_at_screen(event.pos)
+
             if picked is not None:
+                dbl = self._double_clicked(picked)
                 self.follow_target = picked
+                self.inspector.set_selected(picked)
+                if dbl:
+                    self._center_on_target(picked)
+
                 self.dragging = False
                 self.drag_start_world = None
                 self.drag_current_world = None
@@ -197,15 +249,15 @@ class SandboxScene:
                 self.last_predict_pos = None
                 self.last_predict_vel = None
             else:
+                self.inspector.clear()
+                self._double_clicked(None)
+
                 self.dragging = True
                 self.drag_start_world = screen_to_world(pygame.Vector2(event.pos), self.camera_offset, self.zoom)
                 self.drag_current_world = self.drag_start_world
                 self.predicted_cache = []
                 self.last_predict_pos = None
                 self.last_predict_vel = None
-
-        elif event.type == pygame.MOUSEMOTION and self.dragging:
-            self.drag_current_world = screen_to_world(pygame.Vector2(event.pos), self.camera_offset, self.zoom)
 
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 1 and self.dragging:
             drag_end_world = screen_to_world(pygame.Vector2(event.pos), self.camera_offset, self.zoom)
@@ -222,6 +274,7 @@ class SandboxScene:
             self.predicted_cache = []
             self.last_predict_pos = None
             self.last_predict_vel = None
+            self.last_orbit_kind = "UNKNOWN"
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
             self.panning = True
@@ -229,16 +282,28 @@ class SandboxScene:
             self.pan_start_offset = self.camera_offset.copy()
             self.follow_target = None
 
-        elif event.type == pygame.MOUSEMOTION and self.panning:
-            delta = pygame.Vector2(event.pos) - self.pan_start_screen
-            self.camera_offset = self.pan_start_offset - delta / self.zoom
-
         elif event.type == pygame.MOUSEBUTTONUP and event.button == 3:
             self.panning = False
 
         return None
 
     def update(self, dt, compute_gravity):
+        stars = [b for b in self.bodies if getattr(b, "is_star", False)]
+        self.inspector.set_context_stars(stars)
+
+        if self.paused:
+            if self.follow_target is not None:
+                ui_dt = max(0.0, min(1 / 30, dt))
+                self.camera_offset = smooth_follow(
+                    self.camera_offset,
+                    self.follow_target.pos,
+                    (self.w, self.h),
+                    self.zoom,
+                    ui_dt,
+                    strength=12.0,
+                )
+            return None
+
         dt *= self.time_scale
 
         forces = compute_gravity(self.bodies)
@@ -253,6 +318,9 @@ class SandboxScene:
 
         if self.follow_target is not None and self.follow_target not in self.bodies:
             self.follow_target = None
+
+        if self.inspector.selected is not None and self.inspector.selected not in self.bodies:
+            self.inspector.clear()
 
         if self.follow_target is not None:
             ui_dt = max(0.0, min(1 / 30, dt / max(0.0001, self.time_scale)))
@@ -274,18 +342,27 @@ class SandboxScene:
         for body in self.bodies:
             body.draw(screen, self.camera_offset, self.zoom, draw_trail=self.show_trails)
 
+        if self.hover_target is not None and self.hover_target is not self.follow_target:
+            sp = world_to_screen(self.hover_target.pos, self.camera_offset, self.zoom)
+            r = max(6, int((getattr(self.hover_target, "radius", 10) + 10) * self.zoom))
+            pygame.draw.circle(screen, (180, 180, 180), (int(sp.x), int(sp.y)), r, 1)
+
         if self.follow_target is not None:
             sp = world_to_screen(self.follow_target.pos, self.camera_offset, self.zoom)
             r = max(6, int((getattr(self.follow_target, "radius", 10) + 8) * self.zoom))
             pygame.draw.circle(screen, (240, 240, 240), (int(sp.x), int(sp.y)), r, 2)
 
-        if self.show_labels:
-            for body in self.bodies:
-                if not body.name:
-                    continue
-                sp = (body.pos - self.camera_offset) * self.zoom
-                label = self.font_label.render(body.name, True, (230, 230, 230))
-                screen.blit(label, (int(sp.x) + 10, int(sp.y) - 18))
+        if self.inspector.selected is not None:
+            self.inspector.selected.draw_vectors(
+                screen,
+                self.camera_offset,
+                self.zoom,
+                show_vel=self.inspector.show_velocity_vector,
+                show_acc=self.inspector.show_acceleration_vector,
+            )
+
+        orbit_kind = "UNKNOWN"
+        orbit_color = (120, 140, 255)
 
         if self.dragging and self.drag_start_world and self.drag_current_world:
             direction = self.drag_current_world - self.drag_start_world
@@ -298,11 +375,21 @@ class SandboxScene:
                 or (initial_velocity - self.last_predict_vel).length() >= 0.8
             )
 
+            stars = [b for b in self.bodies if getattr(b, "is_star", False)]
+
             if need_recalc:
-                stars = [b for b in self.bodies if b.is_star]
-                self.predicted_cache = predict_orbit(self.drag_start_world, initial_velocity, stars)
+                orbit_kind = classify_orbit(self.drag_start_world, initial_velocity, stars, G=G)
+                self.last_orbit_kind = orbit_kind
+                self.predicted_cache = predict_orbit(self.drag_start_world, initial_velocity, stars, G=G)
                 self.last_predict_pos = self.drag_start_world.copy()
                 self.last_predict_vel = initial_velocity.copy()
+            else:
+                orbit_kind = self.last_orbit_kind
+
+            if orbit_kind == "BOUND":
+                orbit_color = (120, 220, 160)
+            elif orbit_kind == "ESCAPE":
+                orbit_color = (255, 130, 120)
 
             draw_faded_orbit(
                 screen,
@@ -310,31 +397,34 @@ class SandboxScene:
                 self.predicted_cache,
                 self.camera_offset,
                 self.zoom,
-                (120, 140, 255),
-            )
-
-        if self.dragging and self.drag_start_world and self.drag_current_world:
-            s_start = world_to_screen(self.drag_start_world, self.camera_offset, self.zoom)
-            s_curr = world_to_screen(self.drag_current_world, self.camera_offset, self.zoom)
-
-            preset = PLANET_PRESETS[self.current_preset]
-            pygame.draw.circle(
-                screen,
-                preset["color"],
-                (int(s_start.x), int(s_start.y)),
-                max(1, int(preset["radius"] * self.zoom)),
-            )
-            pygame.draw.line(
-                screen,
-                (200, 200, 200),
-                (int(s_start.x), int(s_start.y)),
-                (int(s_curr.x), int(s_curr.y)),
-                1,
+                orbit_color,
             )
 
         follow_text = "Off" if self.follow_target is None else (self.follow_target.name or "Object")
+        orbit_text = {"BOUND": "Bound", "ESCAPE": "Escape", "UNKNOWN": "-"}[orbit_kind] if self.dragging else "-"
+
         status = [
-            f"Zoom {self.zoom:.2f}   Time x{self.time_scale:.1f}   Preset {self.current_preset}   Follow {follow_text}"
+            f"Zoom {self.zoom:.2f}   Time x{self.time_scale:.1f}   Preset {self.current_preset}   Follow {follow_text}",
+            f"Orbit {orbit_text}" + ("   PAUSED" if self.paused else ""),
         ]
-        controls = "LMB create / click body to follow   RMB pan   Scroll zoom   F follow   C center   T trails   L labels   R reset   D demo   TAB help   ESC menu"
-        self.hud.draw(screen, "SANDBOX", status, controls_line=controls)
+
+        controls = (
+            "LMB drag create / click inspect+follow   Doubleclick: center   RMB pan   Scroll zoom   "
+            "SPACE pause   F cycle   C center   T trails   L labels   R reset   D demo   TAB help   ESC menu"
+        )
+
+        # --- HUD CLIP: never draw under inspector area ---
+        right_margin = self.inspector.panel_w + 30 if self.inspector.selected is not None else 0
+        if right_margin > 0:
+            clip_w = max(200, screen.get_width() - right_margin - 10)
+            screen.set_clip(pygame.Rect(0, 0, clip_w, screen.get_height()))
+        else:
+            screen.set_clip(None)
+
+        # Call HUD without avoid_rect (compatible with your existing hud.py)
+        self.hud.draw(screen, "SANDBOX", status, controls_line=controls, right_margin=right_margin)
+
+        # reset clip
+        screen.set_clip(None)
+
+        self.inspector.draw(screen)

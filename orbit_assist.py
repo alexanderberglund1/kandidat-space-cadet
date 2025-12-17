@@ -1,75 +1,90 @@
 import pygame
-from physics import G
 
 
-def predict_orbit(start_pos, start_vel, stars, steps=180, dt=0.06, softening=1000.0):
-    temp_pos = start_pos.copy()
-    temp_vel = start_vel.copy()
-    points = []
-
+def _dominant_star(pos, stars):
     if not stars:
-        return points
+        return None
+    best = None
+    best_score = -1.0
+    for s in stars:
+        dx = s.pos.x - pos.x
+        dy = s.pos.y - pos.y
+        r2 = dx * dx + dy * dy
+        if r2 <= 0:
+            continue
+        score = s.mass / r2
+        if score > best_score:
+            best_score = score
+            best = s
+    return best
 
-    star_data = [(s.pos.x, s.pos.y, s.mass) for s in stars]
 
+def classify_orbit(pos, vel, stars, G=1.0, softening=1200.0):
+    star = _dominant_star(pos, stars)
+    if star is None:
+        return "UNKNOWN"
+
+    r = (star.pos - pos).length()
+    if r <= 0:
+        return "UNKNOWN"
+
+    mu = G * star.mass
+    v2 = vel.length_squared()
+
+    eps = 0.5 * v2 - mu / (r + softening * 0.001)
+    return "BOUND" if eps < 0 else "ESCAPE"
+
+
+def predict_orbit(start_pos, start_vel, stars, steps=400, dt=0.06, G=1.0, softening=1200.0):
+    pos = pygame.Vector2(start_pos)
+    vel = pygame.Vector2(start_vel)
+
+    pts = []
     for _ in range(steps):
-        ax = 0.0
-        ay = 0.0
+        acc = pygame.Vector2(0, 0)
 
-        px = temp_pos.x
-        py = temp_pos.y
-
-        for sx, sy, sm in star_data:
-            dx = sx - px
-            dy = sy - py
+        for s in stars:
+            dx = s.pos.x - pos.x
+            dy = s.pos.y - pos.y
             dist_sq = dx * dx + dy * dy + softening
             dist = dist_sq ** 0.5
             if dist == 0.0:
                 continue
+
             inv_dist = 1.0 / dist
-            accel_mag = (G * sm) / dist_sq
-            ax += dx * inv_dist * accel_mag
-            ay += dy * inv_dist * accel_mag
+            a_mag = (G * s.mass) / dist_sq
+            acc.x += dx * inv_dist * a_mag
+            acc.y += dy * inv_dist * a_mag
 
-        temp_vel.x += ax * dt
-        temp_vel.y += ay * dt
-        temp_pos.x += temp_vel.x * dt
-        temp_pos.y += temp_vel.y * dt
-        points.append(temp_pos.copy())
+        vel += acc * dt
+        pos += vel * dt
+        pts.append(pos.copy())
 
-    return points
+    return pts
 
 
-def draw_faded_orbit(surface, overlay, points, camera_offset, zoom, color_rgb):
+def draw_faded_orbit(screen, overlay, points, camera_offset, zoom, color):
     if len(points) < 2:
         return
 
     overlay.fill((0, 0, 0, 0))
-    w, h = surface.get_size()
-    total = len(points)
 
-    for i in range(total - 1):
-        if i % 2 != 0:
-            continue
-
-        alpha = int(190 * (1.0 - i / total))
-        if alpha <= 0:
-            break
-
+    n = len(points) - 1
+    for i in range(n):
         p1 = (points[i] - camera_offset) * zoom
         p2 = (points[i + 1] - camera_offset) * zoom
 
-        if (p1.x < -200 and p2.x < -200) or (p1.x > w + 200 and p2.x > w + 200):
-            continue
-        if (p1.y < -200 and p2.y < -200) or (p1.y > h + 200 and p2.y > h + 200):
-            continue
+        t = i / max(1, n)
+        alpha = int(160 * (1.0 - t))
+        if alpha <= 0:
+            break
 
         pygame.draw.line(
             overlay,
-            (color_rgb[0], color_rgb[1], color_rgb[2], alpha),
+            (color[0], color[1], color[2], alpha),
             (int(p1.x), int(p1.y)),
             (int(p2.x), int(p2.y)),
-            1,
+            2 if zoom > 1.2 else 1,
         )
 
-    surface.blit(overlay, (0, 0))
+    screen.blit(overlay, (0, 0))

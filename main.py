@@ -6,8 +6,8 @@ from scenes.menu import MenuScene
 from scenes.sandbox import SandboxScene
 from scenes.demo import DemoScene
 
-WIDTH = 1280
-HEIGHT = 720
+WIDTH = 1920
+HEIGHT = 1080
 FPS = 60
 
 
@@ -49,7 +49,7 @@ def main():
                     state = "SANDBOX"
 
                 elif next_state == "DEMO":
-                    demo = DemoScene(fonts, (WIDTH, HEIGHT))  # ny varje gång
+                    demo = DemoScene(fonts, (WIDTH, HEIGHT))  
                     state = "DEMO"
 
             elif state == "SANDBOX":

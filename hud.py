@@ -2,15 +2,12 @@ import pygame
 
 
 class HUD:
-    def __init__(self, font, pad=10, gap=4, alpha=150, radius=12):
+    def __init__(self, font):
         self.font = font
-        self.pad = pad
-        self.gap = gap
-        self.alpha = alpha
-        self.radius = radius
-
         self.enabled = True
-        self.show_controls = False
+        self.show_controls = True
+        self.pad = 10
+        self.gap = 6
 
     def toggle(self):
         self.enabled = not self.enabled
@@ -18,43 +15,96 @@ class HUD:
     def toggle_controls(self):
         self.show_controls = not self.show_controls
 
-    def draw(self, screen, title, status_lines, controls_line=None, pos=(12, 12)):
+    def _wrap_text(self, text, max_width):
+        if not text:
+            return []
+
+        words = text.split(" ")
+        lines = []
+        cur = ""
+
+        for w in words:
+            test = w if cur == "" else (cur + " " + w)
+            if self.font.size(test)[0] <= max_width:
+                cur = test
+            else:
+                if cur:
+                    lines.append(cur)
+                cur = w
+
+        if cur:
+            lines.append(cur)
+
+        return lines
+
+    def draw(self, screen, title, status_lines, controls_line=None, right_margin=0):
         if not self.enabled:
             return
 
-        title_surf = self.font.render(title, True, (255, 255, 255))
-        status_surfs = [self.font.render(line, True, (210, 210, 210)) for line in status_lines]
+        screen_w = screen.get_width()
 
-        controls_surf = None
+        # left area available (avoid inspector area)
+        available_w = max(220, screen_w - right_margin - 20)
+
+        # build logical lines
+        base_text = [str(title)] + [str(s) for s in (status_lines or [])]
+
+        ctrl_text_lines = []
         if self.show_controls and controls_line:
-            controls_surf = self.font.render(controls_line, True, (185, 185, 185))
+            wrap_w = max(180, available_w - self.pad * 2)
+            ctrl_text_lines = self._wrap_text(str(controls_line), wrap_w)
 
-        all_surfs = [title_surf] + status_surfs + ([controls_surf] if controls_surf else [])
-        w = max(s.get_width() for s in all_surfs) + self.pad * 2
+        # render surfaces and measure widths
+        base_surfs = [self.font.render(t, True, (240, 240, 240)) if i == 0 else self.font.render(t, True, (210, 210, 210))
+                      for i, t in enumerate(base_text)]
 
-        h = self.pad * 2 + title_surf.get_height()
-        if status_surfs:
-            h += self.gap + sum(s.get_height() for s in status_surfs) + self.gap * (len(status_surfs) - 1)
-        if controls_surf:
-            h += self.gap + controls_surf.get_height()
+        ctrl_surfs = [self.font.render(t, True, (170, 170, 170)) for t in ctrl_text_lines]
 
-        panel = pygame.Surface((w, h), pygame.SRCALPHA)
-        pygame.draw.rect(panel, (0, 0, 0, self.alpha), (0, 0, w, h), border_radius=self.radius)
-        pygame.draw.rect(panel, (255, 255, 255, 40), (0, 0, w, h), width=1, border_radius=self.radius)
+        all_surfs = base_surfs + ctrl_surfs
+        if not all_surfs:
+            return
 
+        max_line_w = max(s.get_width() for s in all_surfs)
+        box_w = min(available_w, max_line_w + self.pad * 2)
+
+        # height
+        line_h = self.font.get_height()
+        h = self.pad * 2
+
+        # base lines
+        for i, s in enumerate(base_surfs):
+            h += s.get_height()
+            if i != len(base_surfs) - 1:
+                h += self.gap
+
+        # controls block
+        if ctrl_surfs:
+            h += self.gap
+            for i, s in enumerate(ctrl_surfs):
+                h += s.get_height()
+                if i != len(ctrl_surfs) - 1:
+                    h += 4
+
+        # draw box
+        box = pygame.Surface((box_w, h), pygame.SRCALPHA)
+        pygame.draw.rect(box, (0, 0, 0, 150), (0, 0, box_w, h), border_radius=12)
+        pygame.draw.rect(box, (255, 255, 255, 40), (0, 0, box_w, h), width=1, border_radius=12)
+
+        x = self.pad
         y = self.pad
-        panel.blit(title_surf, (self.pad, y))
-        y += title_surf.get_height()
 
-        if status_surfs:
+        for i, surf in enumerate(base_surfs):
+            box.blit(surf, (x, y))
+            y += surf.get_height()
+            if i != len(base_surfs) - 1:
+                y += self.gap
+
+        if ctrl_surfs:
             y += self.gap
-            for s in status_surfs:
-                panel.blit(s, (self.pad, y))
-                y += s.get_height() + self.gap
-            y -= self.gap
+            for i, surf in enumerate(ctrl_surfs):
+                box.blit(surf, (x, y))
+                y += surf.get_height()
+                if i != len(ctrl_surfs) - 1:
+                    y += 4
 
-        if controls_surf:
-            y += self.gap
-            panel.blit(controls_surf, (self.pad, y))
-
-        screen.blit(panel, pos)
+        screen.blit(box, (10, 10))

@@ -37,10 +37,12 @@ class Starfield:
 
         w, h = self.width, self.height
         cx, cy = camera_offset.x, camera_offset.y
+        ox, oy = w * 0.5, h * 0.5
 
         for x, y, size, alpha, parallax in self.stars:
-            sx = (x - cx * parallax) * zoom
-            sy = (y - cy * parallax) * zoom
+            
+            sx = ((x - cx * parallax) - ox) * zoom + ox
+            sy = ((y - cy * parallax) - oy) * zoom + oy
 
             if sx < -10 or sy < -10 or sx > w + 10 or sy > h + 10:
                 continue
