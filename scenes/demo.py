@@ -12,6 +12,7 @@ from physics import G
 from starfield import Starfield
 from hud import HUD
 from inspector import InspectorPanel
+from scenes.pause_menu import PauseMenu
 
 
 DOUBLECLICK_MS = 320
@@ -100,6 +101,10 @@ class DemoScene:
         self.inspector = InspectorPanel(self.font_ui, (self.w, self.h))
         self.inspector.set_mode("demo")
 
+        
+        self.pause_menu = PauseMenu(fonts, (self.w, self.h))
+        self._paused_before_menu = False
+
         self.bodies = create_solar_system((self.w / 2, self.h / 2))
 
         self.zoom = 1.0
@@ -115,7 +120,7 @@ class DemoScene:
         self.follow_target = None
         self.hover_target = None
 
-        self.paused = False
+        self.paused = False  
 
         self._last_click_ms = 0
         self._last_click_body = None
@@ -167,14 +172,42 @@ class DemoScene:
         self._last_click_body = body
         return ok
 
+    def _open_pause_menu(self):
+        self._paused_before_menu = self.paused
+        self.pause_menu.open = True
+        self.paused = True
+
+    def _close_pause_menu(self):
+        self.pause_menu.close()
+        self.paused = self._paused_before_menu
+
     def handle_event(self, event):
+        
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            if self.pause_menu.open:
+                self._close_pause_menu()
+            else:
+                self._open_pause_menu()
+            return None
+
+        
+        if self.pause_menu.open:
+            action = self.pause_menu.handle_event(event)
+            if action == "RESUME":
+                self._close_pause_menu()
+                return None
+            if action == "MENU":
+                self._close_pause_menu()
+                return "MENU"
+            if action == "QUIT":
+                self._close_pause_menu()
+                return "QUIT"
+            return None
+
         if self.inspector.handle_event(event):
             return None
 
         if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
-                return "MENU"
-
             if event.key == pygame.K_h:
                 self.hud.toggle()
 
@@ -279,12 +312,38 @@ class DemoScene:
 
         return None
 
+    def _draw_labels(self, screen):
+        if not self.show_labels:
+            return
+
+        for body in self.bodies:
+            if getattr(body, "is_star", False):
+                continue
+
+            name = getattr(body, "name", None)
+            if not name:
+                continue
+
+            sp = world_to_screen(body.pos, self.camera_offset, self.zoom)
+            r = max(6, int(getattr(body, "radius", 10) * self.zoom))
+
+            label = self.font_label.render(str(name), True, (205, 205, 205))
+            shadow = self.font_label.render(str(name), True, (20, 20, 25))
+
+            x = int(sp.x - label.get_width() // 2)
+            y = int(sp.y - r - 14)
+
+            screen.blit(shadow, (x + 1, y + 1))
+            screen.blit(label, (x, y))
+
     def draw(self, screen):
         screen.fill((5, 5, 15))
         self.starfield.draw(screen, self.camera_offset, self.zoom)
 
         for body in self.bodies:
             body.draw(screen, self.camera_offset, self.zoom, draw_trail=self.show_trails)
+
+        self._draw_labels(screen)
 
         if self.hover_target is not None and self.hover_target is not self.follow_target:
             sp = world_to_screen(self.hover_target.pos, self.camera_offset, self.zoom)
@@ -309,7 +368,7 @@ class DemoScene:
         status = [f"Zoom {self.zoom:.2f}   Follow {follow_text}" + ("   PAUSED" if self.paused else "")]
         controls = (
             "Click planet inspect+follow   Doubleclick: center   Scroll zoom   RMB pan   SPACE pause   "
-            "F cycle   C center   T trails   L labels   TAB help   ESC menu"
+            "F cycle   C center   T trails   L labels   TAB help   ESC options"
         )
 
         right_margin = self.inspector.panel_w + 30 if self.inspector.selected is not None else 0
@@ -323,3 +382,6 @@ class DemoScene:
         screen.set_clip(None)
 
         self.inspector.draw(screen)
+
+        
+        self.pause_menu.draw(screen, title="OPTIONS")

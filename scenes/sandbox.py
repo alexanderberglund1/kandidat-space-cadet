@@ -21,6 +21,7 @@ from starfield import Starfield
 from hud import HUD
 from physics import G
 from inspector import InspectorPanel
+from scenes.pause_menu import PauseMenu
 
 
 PLANET_PRESETS = {
@@ -75,6 +76,10 @@ class SandboxScene:
 
         self.inspector = InspectorPanel(self.font_ui, (self.w, self.h))
         self.inspector.set_mode("sandbox")
+
+        # Pause/options overlay (ESC)
+        self.pause_menu = PauseMenu(fonts, (self.w, self.h))
+        self._paused_before_menu = False
 
         self.time_scale = 1.0
         self.current_preset = 2
@@ -154,14 +159,43 @@ class SandboxScene:
         self._last_click_body = body
         return ok
 
+    def _open_pause_menu(self):
+        self._paused_before_menu = self.paused
+        self.pause_menu.open = True
+        self.paused = True
+
+    def _close_pause_menu(self):
+        self.pause_menu.close()
+        self.paused = self._paused_before_menu
+
     def handle_event(self, event):
+        # ESC togglar options overlay (alltid prio)
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            if self.pause_menu.open:
+                self._close_pause_menu()
+            else:
+                self._open_pause_menu()
+            return None
+
+        # När options är öppet: ät ALL input och hantera bara menyn
+        if self.pause_menu.open:
+            action = self.pause_menu.handle_event(event)
+            if action == "RESUME":
+                self._close_pause_menu()
+                return None
+            if action == "MENU":
+                self._close_pause_menu()
+                return "MENU"
+            if action == "QUIT":
+                self._close_pause_menu()
+                return "QUIT"
+            return None
+
+        # Inspector först
         if self.inspector.handle_event(event):
             return None
 
         if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_ESCAPE:
-                return "MENU"
-
             if event.key == pygame.K_h:
                 self.hud.toggle()
 
@@ -410,10 +444,9 @@ class SandboxScene:
 
         controls = (
             "LMB drag create / click inspect+follow   Doubleclick: center   RMB pan   Scroll zoom   "
-            "SPACE pause   F cycle   C center   T trails   L labels   R reset   D demo   TAB help   ESC menu"
+            "SPACE pause   F cycle   C center   T trails   L labels   R reset   D demo   TAB help   ESC options"
         )
 
-        # --- HUD CLIP: never draw under inspector area ---
         right_margin = self.inspector.panel_w + 30 if self.inspector.selected is not None else 0
         if right_margin > 0:
             clip_w = max(200, screen.get_width() - right_margin - 10)
@@ -421,10 +454,11 @@ class SandboxScene:
         else:
             screen.set_clip(None)
 
-        # Call HUD without avoid_rect (compatible with your existing hud.py)
         self.hud.draw(screen, "SANDBOX", status, controls_line=controls, right_margin=right_margin)
-
-        # reset clip
         screen.set_clip(None)
 
         self.inspector.draw(screen)
+
+        # IMPORTANT: ensure no clipping affects the overlay
+        screen.set_clip(None)
+        self.pause_menu.draw(screen, title="OPTIONS")

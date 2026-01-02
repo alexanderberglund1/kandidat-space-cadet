@@ -1,6 +1,8 @@
 import math
 import pygame
 
+from physics import G, SOFTENING
+
 
 class InspectorPanel:
     def __init__(self, font, size):
@@ -115,8 +117,19 @@ class InspectorPanel:
         return self.font.render(s, True, color)
 
     def _panel_bg(self, surf):
-        pygame.draw.rect(surf, (0, 0, 0, 165), (0, 0, surf.get_width(), surf.get_height()), border_radius=16)
-        pygame.draw.rect(surf, (255, 255, 255, 45), (0, 0, surf.get_width(), surf.get_height()), width=1, border_radius=16)
+        pygame.draw.rect(
+            surf,
+            (0, 0, 0, 165),
+            (0, 0, surf.get_width(), surf.get_height()),
+            border_radius=16,
+        )
+        pygame.draw.rect(
+            surf,
+            (255, 255, 255, 45),
+            (0, 0, surf.get_width(), surf.get_height()),
+            width=1,
+            border_radius=16,
+        )
 
     def _draw_toggle(self, screen, rect, label, on):
         pygame.draw.rect(screen, (0, 0, 0, 160), rect, border_radius=10)
@@ -137,11 +150,9 @@ class InspectorPanel:
         right_x = self._rect.x + self.panel_w - self.pad
         bw = 28
 
-        
         t = self._text(label, (210, 210, 210))
         screen.blit(t, (x, self._rect.y + y_local + 7))
 
-        
         v = self._text(f"{value:,.2f}".replace(",", " "), (230, 230, 230))
         screen.blit(v, (x + 140, self._rect.y + y_local + 7))
 
@@ -159,6 +170,7 @@ class InspectorPanel:
             return star
         if not self._stars:
             return None
+
         best = None
         best_score = -1.0
         for s in self._stars:
@@ -172,6 +184,56 @@ class InspectorPanel:
                 best_score = score
                 best = s
         return best
+
+    def _orbit_params_about_star(self, body, star):
+       
+        r = pygame.Vector2(body.pos) - pygame.Vector2(star.pos)
+        v = pygame.Vector2(getattr(body, "vel", (0, 0))) - pygame.Vector2(getattr(star, "vel", (0, 0)))
+
+        r_len = r.length()
+        if r_len <= 1e-6:
+            return None
+
+        mu = G * float(getattr(star, "mass", 0.0))
+        if mu <= 1e-9:
+            return None
+
+        soft_r = math.sqrt(r_len * r_len + SOFTENING)
+        v2 = v.length_squared()
+
+        
+        eps = 0.5 * v2 - mu / soft_r
+
+        
+        h = r.x * v.y - r.y * v.x
+        h2 = h * h
+
+        
+        e2 = 1.0 + (2.0 * eps * h2) / (mu * mu)
+        if e2 < 0.0:
+            
+            e2 = 0.0
+        e = math.sqrt(e2)
+
+        
+        denom = mu * (1.0 + e)
+        rp = (h2 / denom) if denom > 1e-12 else None
+
+        
+        a = None
+        ra = None
+        if eps < 0.0:
+            a = -mu / (2.0 * eps)
+            
+            ra = a * (1.0 + e)
+
+        return {
+            "eps": eps,
+            "e": e,
+            "a": a,
+            "rp": rp,
+            "ra": ra,
+        }
 
     def draw(self, screen):
         if not self.enabled or self.selected is None:
@@ -195,19 +257,42 @@ class InspectorPanel:
         dist = (star.pos - b.pos).length() if star is not None else None
         star_name = getattr(star, "name", "Star") if star is not None else None
 
+        
+        has_energy = star is not None and getattr(b, "mass", 0) > 0 and dist is not None and dist > 0
+        KE = PE = TE = None
+        bound_tag = None
+
+        if has_energy:
+            m = float(b.mass)
+            v2 = vel.length_squared()
+            soft_r = math.sqrt(dist * dist + SOFTENING)
+
+            KE = 0.5 * m * v2
+            PE = -(G * m * float(star.mass)) / soft_r
+            TE = KE + PE
+            bound_tag = "BOUND" if TE < 0 else "UNBOUND"
+
+        
+        orbit = None
+        if star is not None and not getattr(b, "is_star", False):
+            orbit = self._orbit_params_about_star(b, star)
+
         has_tweaks = self.mode == "sandbox" and self._has_tweaks(b)
 
         
-        base_text_lines = 2 + 1 + 5 + 1 + 4  
+        base_text_lines = 2 + 1 + 5 + 1 + 3  
         if dist is not None:
             base_text_lines += 1
-        base_h = self.pad * 2 + 26 + (base_text_lines * 20) + 10
+        if has_energy:
+            base_text_lines += 1 + 4  
+        if orbit is not None:
+            base_text_lines += 1 + 4  
 
+        base_h = self.pad * 2 + 26 + (base_text_lines * 20) + 10
         toggles_h = self._toggle_h * 2 + self._gap * 2
 
         tweaks_h = 0
         if has_tweaks:
-            
             tweaks_h = 22 + (self._row_h * 4) + self._gap + self._toggle_h + 14
 
         self._rect.height = base_h + toggles_h + tweaks_h
@@ -225,9 +310,9 @@ class InspectorPanel:
         panel.blit(self._text("Motion", (255, 255, 255)), (self.pad, y))
         y += 22
 
-        def line(txt):
+        def line(txt, col=(210, 210, 210)):
             nonlocal y
-            panel.blit(self._text(txt, (210, 210, 210)), (self.pad, y))
+            panel.blit(self._text(txt, col), (self.pad, y))
             y += 20
 
         line(f"Velocity X: {vel.x:,.2f}".replace(",", " "))
@@ -244,6 +329,38 @@ class InspectorPanel:
         line(f"Accel Y:    {acc.y:,.3f}".replace(",", " "))
         line(f"Strength:   {accel_mag:,.3f}".replace(",", " "))
 
+        if has_energy:
+            y += 6
+            panel.blit(self._text("Energy", (255, 255, 255)), (self.pad, y))
+            y += 22
+            line(f"Kinetic:    {KE:,.2f}".replace(",", " "))
+            line(f"Potential:  {PE:,.2f}".replace(",", " "))
+            line(f"Total:      {TE:,.2f}".replace(",", " "))
+
+            tag_col = (120, 220, 160) if bound_tag == "BOUND" else (255, 130, 120)
+            line(f"Status:     {bound_tag}", tag_col)
+
+        if orbit is not None:
+            y += 6
+            panel.blit(self._text("Orbit", (255, 255, 255)), (self.pad, y))
+            y += 22
+
+            e = orbit["e"]
+            a = orbit["a"]
+            rp = orbit["rp"]
+            ra = orbit["ra"]
+
+            line(f"Eccentricity: {e:,.4f}".replace(",", " "))
+
+            if a is None:
+                line("Semi-major a:  N/A")
+                line(f"Periapsis:     {rp:,.2f}".replace(",", " ") if rp is not None else "Periapsis:     N/A")
+                line("Apoapsis:      N/A")
+            else:
+                line(f"Semi-major a:  {a:,.2f}".replace(",", " "))
+                line(f"Periapsis:     {rp:,.2f}".replace(",", " ") if rp is not None else "Periapsis:     N/A")
+                line(f"Apoapsis:      {ra:,.2f}".replace(",", " ") if ra is not None else "Apoapsis:      N/A")
+
         screen.blit(panel, self._rect.topleft)
 
         
@@ -257,12 +374,18 @@ class InspectorPanel:
         
         y_screen = self._rect.y + y + 10
         self._btn_vel = pygame.Rect(self._rect.x + self.pad, y_screen, self.panel_w - self.pad * 2, self._toggle_h)
-        self._btn_acc = pygame.Rect(self._rect.x + self.pad, y_screen + self._toggle_h + self._gap, self.panel_w - self.pad * 2, self._toggle_h)
+        self._btn_acc = pygame.Rect(
+            self._rect.x + self.pad,
+            y_screen + self._toggle_h + self._gap,
+            self.panel_w - self.pad * 2,
+            self._toggle_h,
+        )
         self._draw_toggle(screen, self._btn_vel, "Velocity vector", self.show_velocity_vector)
         self._draw_toggle(screen, self._btn_acc, "Acceleration vector", self.show_acceleration_vector)
 
         y_screen = y_screen + (self._toggle_h * 2) + self._gap + 14
 
+        
         if has_tweaks:
             screen.blit(self._text("Sandbox tweaks", (255, 255, 255)), (self._rect.x + self.pad, y_screen))
             y_local = (y_screen - self._rect.y) + 22

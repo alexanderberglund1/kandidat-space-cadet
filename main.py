@@ -23,7 +23,7 @@ def main():
         "label": pygame.font.SysFont(None, 18),
     }
 
-    menu = MenuScene(fonts)
+    menu = MenuScene(fonts, (WIDTH, HEIGHT))
 
     state = "MENU"
     sandbox = None
@@ -49,18 +49,24 @@ def main():
                     state = "SANDBOX"
 
                 elif next_state == "DEMO":
-                    demo = DemoScene(fonts, (WIDTH, HEIGHT))  
+                    demo = DemoScene(fonts, (WIDTH, HEIGHT))
                     state = "DEMO"
 
             elif state == "SANDBOX":
                 next_state = sandbox.handle_event(event)
                 if next_state == "MENU":
                     state = "MENU"
+                elif next_state == "QUIT":
+                    running = False
+                    break
 
             elif state == "DEMO":
                 next_state = demo.handle_event(event)
                 if next_state == "MENU":
                     state = "MENU"
+                elif next_state == "QUIT":
+                    running = False
+                    break
 
         if not running:
             break
